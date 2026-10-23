@@ -1,0 +1,8 @@
+dist/
+package-lock.json
+LICENSE.md
+android/
+ios/
+example/android/
+example/ios/
+example/icons/

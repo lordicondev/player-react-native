@@ -1,0 +1,242 @@
+# Types, lint, formatting, tests; the example app's self-test in Chromium, Firefox and WebKit;
+# the example app built for Android and its self-test on an emulator; apps made as a user makes
+# them (consumer/), with both packages from npm pack: web (Vite, webpack, Expo) and Android
+# (Expo, the oldest React Native supported).
+#
+# @lordicon/runtime comes from npm, the version in package-lock.json.
+name: CI
+
+on:
+    push:
+        branches: ['main', 'develop']
+    pull_request:
+        branches: ['main', 'develop']
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - working-directory: player-react-native
+              run: |
+                  npm ci
+                  npm run check
+                  npm test
+                  npm run build
+
+    # The same self-test in browsers (example/e2e-web.mjs): the example on Vite with
+    # react-native-web, a real click on LordIcon.Target. Logs, and screenshots of failures.
+    e2e-web:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - name: npm ci
+              run: |
+                  npm ci --prefix player-react-native
+                  npm ci --prefix player-react-native/example
+            - name: Browsers
+              working-directory: player-react-native/example
+              run: npx playwright install --with-deps chromium firefox webkit
+            - name: Self-test in the browsers
+              working-directory: player-react-native/example
+              run: npm run e2e:web -- --browsers chromium,firefox,webkit --out ../../e2e-web-out
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: web-e2e
+                  path: e2e-web-out
+
+    android:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+              with:
+                  distribution: temurin
+                  java-version: 17
+            - name: npm ci
+              run: |
+                  npm ci --prefix player-react-native
+                  npm ci --prefix player-react-native/example
+            - name: Build (Release, arm64 and x86_64)
+              working-directory: player-react-native/example/android
+              run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: android-apk
+                  path: player-react-native/example/android/app/build/outputs/apk/release/app-release.apk
+
+    # The example on an Android emulator: the self-test (example/dev/SelfTest.tsx) loads icons in
+    # each render mode, plays them to the end, changes a state, mounts them again, checks the
+    # triggers and mounts every example of the gallery; e2e-android.sh also fails on a crash or on
+    # view commands Fabric dropped. Log and screenshot as artifacts.
+    e2e-android:
+        needs: android
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  name: android-apk
+                  path: apk
+            - name: KVM
+              run: |
+                  echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+                  sudo udevadm control --reload-rules
+                  sudo udevadm trigger --name-match=kvm
+            - name: Self-test on the emulator
+              uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+              with:
+                  api-level: 35
+                  arch: x86_64
+                  target: google_apis
+                  disable-animations: true
+                  script: |
+                      adb install -r apk/app-release.apk
+                      player-react-native/example/e2e-android.sh e2e-out
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: android-e2e
+                  path: e2e-out
+
+    # Both packages as npm would ship them, for the consumer apps.
+    consumer-packs:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - name: Pack
+              run: |
+                  mkdir packs
+                  cd player-react-native && npm ci && npm pack --pack-destination ../packs
+                  npm pack @lordicon/runtime@$(node -p "require('./package-lock.json').packages['node_modules/@lordicon/runtime'].version") --pack-destination ../packs
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              with:
+                  name: consumer-packs
+                  path: packs
+
+    consumer-web:
+        needs: consumer-packs
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                flavour: [vite, webpack, expo]
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  name: consumer-packs
+                  path: packs
+            # Playwright comes from the example's dependencies.
+            - name: Browsers
+              working-directory: player-react-native/example
+              run: |
+                  npm ci
+                  npx playwright install --with-deps chromium firefox
+            - name: ${{ matrix.flavour }}
+              working-directory: player-react-native/consumer
+              env:
+                  PACKS: ${{ github.workspace }}/packs
+                  PREBUILD: none
+              run: |
+                  ./create.sh ${{ matrix.flavour }} ../../consumer-app
+                  node check-web.mjs ${{ matrix.flavour }} ../../consumer-app chromium,firefox
+
+    consumer-android:
+        needs: consumer-packs
+        runs-on: ubuntu-latest
+        timeout-minutes: 40
+        strategy:
+            fail-fast: false
+            matrix:
+                flavour: [expo, rn]
+        steps:
+            # An app's build and the emulator's 7 GB of user data do not fit on the runner's
+            # disk as it comes: drop toolchains this job does not use.
+            - name: Free disk space
+              run: |
+                  sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift
+                  df -h /
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+              with:
+                  distribution: temurin
+                  java-version: 17
+            - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  name: consumer-packs
+                  path: packs
+            - name: Create (${{ matrix.flavour }})
+              working-directory: player-react-native/consumer
+              env:
+                  PACKS: ${{ github.workspace }}/packs
+              run: ./create.sh ${{ matrix.flavour }} ../../consumer-app
+            # More JVM memory than the Expo template asks for: R8 ran out of metaspace. One more try
+            # after a minute: Maven Central now and then answers 404 for artifacts it has.
+            - name: Build (Release, x86_64)
+              working-directory: consumer-app/android
+              run: |
+                  build() {
+                      ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 \
+                          "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" "$@"
+                  }
+                  build || { sleep 60; build --refresh-dependencies; }
+            # Only the APK is needed from here on: the app and Gradle's caches make room for the
+            # emulator.
+            - name: Keep the APK only
+              run: |
+                  cp consumer-app/android/app/build/outputs/apk/release/app-release.apk consumer.apk
+                  ./consumer-app/android/gradlew --stop -p consumer-app/android || true
+                  rm -rf consumer-app ~/.gradle
+                  df -h /
+            - name: KVM
+              run: |
+                  echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+                  sudo udevadm control --reload-rules
+                  sudo udevadm trigger --name-match=kvm
+            - name: Run on the emulator
+              uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+              with:
+                  api-level: 35
+                  arch: x86_64
+                  target: google_apis
+                  # As on a phone: Android reports turned-off animations as less motion.
+                  disable-animations: false
+                  script: player-react-native/consumer/check-android.sh consumer.apk

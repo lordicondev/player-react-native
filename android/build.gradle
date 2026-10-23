@@ -1,0 +1,49 @@
+// @lordicon/react-native on Android: the Fabric view (Kotlin) and the runtime's core with ThorVG
+// (C++), built by CMake from the sources @lordicon/runtime ships.
+apply plugin: "com.android.library"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+def ext(name, fallback) { rootProject.ext.has(name) ? rootProject.ext.get(name) : fallback }
+
+// @lordicon/runtime as Node finds it from here: hoisted, nested, or linked with file:.
+def runtimeDir = providers.exec {
+    workingDir projectDir
+    commandLine "node", "--print", "require('path').dirname(require.resolve('@lordicon/runtime/package.json'))"
+}.standardOutput.asText.get().trim()
+
+android {
+    namespace "com.lordicon.reactnative"
+    compileSdk ext("compileSdkVersion", 36)
+    ndkVersion ext("ndkVersion", "27.1.12297006")
+
+    defaultConfig {
+        minSdk ext("minSdkVersion", 24)
+        def abis = project.findProperty("reactNativeArchitectures")
+        if (abis) ndk { abiFilters(*abis.split(",")) }
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared",
+                    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
+                    "-DLORDICON_RUNTIME=$runtimeDir"
+            }
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    implementation "com.facebook.react:react-android"
+}

@@ -1,0 +1,113 @@
+{
+    "name": "@lordicon/react-native",
+    "version": "1.0.0",
+    "description": "<LordIcon> for React Native: animated Lordicon icons rendered natively by ThorVG, on iOS, Android and the web.",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/lordicondev/player-react-native.git"
+    },
+    "bugs": "https://github.com/lordicondev/player-react-native/issues",
+    "homepage": "https://lordicon.com/",
+    "keywords": [
+        "lordicon",
+        "lottie",
+        "icon",
+        "animation",
+        "react-native",
+        "thorvg"
+    ],
+    "author": "Lordicon <dev@lordicon.com>",
+    "license": "MIT",
+    "sideEffects": false,
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "react-native": "./src/index.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "main": "./dist/index.js",
+    "react-native": "./src/index.ts",
+    "types": "./dist/index.d.ts",
+    "bin": {
+        "lordicon-assets": "bin/lordicon-assets.mjs"
+    },
+    "files": [
+        "src",
+        "!src/**/*.test.ts",
+        "!src/**/*.test.tsx",
+        "!src/testing",
+        "dist",
+        "bin",
+        "android/build.gradle",
+        "android/CMakeLists.txt",
+        "android/src",
+        "cpp",
+        "ios/*.h",
+        "ios/*.mm",
+        "LordiconReactNative.podspec",
+        "react-native.config.js",
+        "README.md",
+        "LICENSE.md",
+        "CHANGELOG.md"
+    ],
+    "publishConfig": {
+        "access": "public"
+    },
+    "engines": {
+        "node": ">=22"
+    },
+    "scripts": {
+        "build": "rm -rf dist && vite build && vite build --config vite.worker.config.ts && tsc -p tsconfig.build.json",
+        "test": "vitest run",
+        "lint": "eslint .",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "check:types": "tsc --noEmit",
+        "check": "npm run check:types && npm run lint && npm run format:check",
+        "prepack": "npm run build",
+        "prepublishOnly": "npm run check && npm test"
+    },
+    "codegenConfig": {
+        "name": "LordiconReactNativeSpec",
+        "type": "all",
+        "jsSrcsDir": "src/native",
+        "android": {
+            "javaPackageName": "com.lordicon.reactnative"
+        },
+        "ios": {
+            "componentProvider": {
+                "LordIconView": "LordIconView"
+            },
+            "modulesProvider": {
+                "LordIcon": "LordIconModule"
+            }
+        }
+    },
+    "peerDependencies": {
+        "react": "^19",
+        "react-native": ">=0.82"
+    },
+    "dependencies": {
+        "@lordicon/runtime": "^0.2.0",
+        "@lordicon/utils-lottie": "^2.0.0"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@types/node": "^26.6.3",
+        "@types/react": "^19.2.0",
+        "@types/react-test-renderer": "^19.3.0",
+        "eslint": "^10.11.0",
+        "eslint-plugin-react-hooks": "^7.1.1",
+        "globals": "^17.12.0",
+        "prettier": "^3.9.9",
+        "react": "19.2.3",
+        "react-native": "0.87.1",
+        "react-test-renderer": "^19.2.3",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.71.0",
+        "vite": "^8.3.4",
+        "vitest": "^5.0.2"
+    }
+}

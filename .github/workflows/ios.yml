@@ -1,0 +1,169 @@
+# The example app on the iOS simulator: build, run, screenshots, the self-test (fails the job
+# unless it passes), and the logs as artifacts. Then apps made as a user makes them (consumer/):
+# Expo and the oldest React Native supported, with both packages from npm pack.
+# Manual: macOS minutes cost 10x on private repositories.
+#
+# @lordicon/runtime comes from npm, the version in package-lock.json.
+name: iOS
+
+on:
+    workflow_dispatch:
+
+jobs:
+    simulator:
+        runs-on: macos-15
+        timeout-minutes: 60
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - name: npm ci
+              run: |
+                  npm ci --prefix player-react-native
+                  npm ci --prefix player-react-native/example
+            - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+              with:
+                  ruby-version: '3.3'
+                  bundler-cache: true
+                  working-directory: player-react-native/example
+            - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              with:
+                  path: player-react-native/example/ios/Pods
+                  key: pods-${{ hashFiles('player-react-native/example/package-lock.json', 'player-react-native/example/ios/Podfile') }}
+            - name: pod install
+              working-directory: player-react-native/example/ios
+              run: bundle exec pod install
+            - name: Build (Release, simulator)
+              working-directory: player-react-native/example/ios
+              run: |
+                  set -o pipefail
+                  xcodebuild -workspace LordIconExample.xcworkspace -scheme LordIconExample \
+                      -configuration Release -sdk iphonesimulator \
+                      -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+                      CODE_SIGNING_ALLOWED=NO build | xcbeautify
+            - name: Run and take screenshots
+              working-directory: player-react-native/example/ios
+              run: |
+                  mkdir -p ../../../out
+                  udid=$(xcrun simctl list devices available -j \
+                      | node -e 'const d=JSON.parse(require("fs").readFileSync(0)).devices; console.log(Object.entries(d).filter(([r])=>r.includes("iOS")).flatMap(([,l])=>l).find(x=>x.name.startsWith("iPhone")).udid)')
+                  xcrun simctl boot "$udid"
+                  xcrun simctl bootstatus "$udid" -b
+                  xcrun simctl install "$udid" build/Build/Products/Release-iphonesimulator/LordIconExample.app
+                  xcrun simctl launch "$udid" com.lordicon.example
+                  sleep 8
+                  xcrun simctl io "$udid" screenshot ../../../out/gallery.png
+                  # The list tab: a launch argument (a link would wait for a confirmation).
+                  xcrun simctl terminate "$udid" com.lordicon.example
+                  xcrun simctl launch "$udid" com.lordicon.example -tab list
+                  sleep 8
+                  xcrun simctl io "$udid" screenshot ../../../out/list-1.png
+                  sleep 0.5
+                  xcrun simctl io "$udid" screenshot ../../../out/list-2.png
+                  # The self-test (example/dev/SelfTest.tsx), as e2e-android.sh runs it: fails the job
+                  # unless it passes. Its lines are console.log, which React Native writes as info
+                  # (os_log), kept only once the subsystem is set to persist them.
+                  xcrun simctl spawn "$udid" log config --subsystem com.facebook.react.log --mode "level:info,persist:info"
+                  xcrun simctl terminate "$udid" com.lordicon.example
+                  xcrun simctl launch "$udid" com.lordicon.example -tab selftest
+                  result=""
+                  for _ in $(seq 1 60); do
+                      sleep 3
+                      xcrun simctl spawn "$udid" log show --last 5m --info --style compact \
+                          --predicate 'subsystem == "com.facebook.react.log" AND eventMessage CONTAINS "LORDICON_SELFTEST"' \
+                          > ../../../out/selftest.log 2>/dev/null || true
+                      result=$(grep -oE 'LORDICON_SELFTEST (PASS|FAIL).*' ../../../out/selftest.log | head -1 || true)
+                      [ -n "$result" ] && break
+                  done
+                  xcrun simctl io "$udid" screenshot ../../../out/selftest.png
+                  xcrun simctl spawn "$udid" log show --last 10m --predicate 'process == "LordIconExample"' > ../../../out/app.log || true
+                  grep -o 'LORDICON_SELFTEST .*' ../../../out/selftest.log || true
+                  case "$result" in
+                      *PASS*) echo "self-test: passed" ;;
+                      *) echo "self-test: ${result:-no result in 3 minutes}"; exit 1 ;;
+                  esac
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: ios-simulator
+                  path: out/
+
+    # Expo's current SDK needs Xcode 26 (Swift 6.2 packages); the oldest React Native builds with
+    # the Xcode of macos-15.
+    consumer:
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 60
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - flavour: expo
+                      runner: macos-26
+                    - flavour: rn
+                      runner: macos-15
+        steps:
+            - name: Xcode
+              run: xcodebuild -version
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  path: player-react-native
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 22.x
+            - name: Pack
+              run: |
+                  mkdir packs
+                  cd player-react-native && npm ci && npm pack --pack-destination ../packs
+                  npm pack @lordicon/runtime@$(node -p "require('./package-lock.json').packages['node_modules/@lordicon/runtime'].version") --pack-destination ../packs
+            - name: Create (${{ matrix.flavour }})
+              working-directory: player-react-native/consumer
+              env:
+                  PACKS: ${{ github.workspace }}/packs
+              run: ./create.sh ${{ matrix.flavour }} ../../consumer-app
+            - name: pod install
+              working-directory: consumer-app/ios
+              run: |
+                  if [ -f ../Gemfile ]; then (cd .. && bundle install) && bundle exec pod install; else pod install; fi
+            - name: Build (Release, simulator)
+              working-directory: consumer-app/ios
+              run: |
+                  set -o pipefail
+                  workspace=$(ls -d *.xcworkspace | head -1)
+                  xcodebuild -workspace "$workspace" -scheme "${workspace%.xcworkspace}" \
+                      -configuration Release -sdk iphonesimulator \
+                      -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+                      CODE_SIGNING_ALLOWED=NO build | xcbeautify
+            - name: Run on the simulator
+              working-directory: consumer-app/ios
+              run: |
+                  mkdir -p ../../out
+                  app=$(ls -d build/Build/Products/Release-iphonesimulator/*.app | head -1)
+                  id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
+                  udid=$(xcrun simctl list devices available -j \
+                      | node -e 'const d=JSON.parse(require("fs").readFileSync(0)).devices; console.log(Object.entries(d).filter(([r])=>r.includes("iOS")).flatMap(([,l])=>l).find(x=>x.name.startsWith("iPhone")).udid)')
+                  xcrun simctl boot "$udid"
+                  xcrun simctl bootstatus "$udid" -b
+                  xcrun simctl spawn "$udid" log config --subsystem com.facebook.react.log --mode "level:info,persist:info"
+                  xcrun simctl install "$udid" "$app"
+                  xcrun simctl launch "$udid" "$id"
+                  result=""
+                  for _ in $(seq 1 40); do
+                      sleep 3
+                      xcrun simctl spawn "$udid" log show --last 5m --info --style compact \
+                          --predicate 'eventMessage CONTAINS "LORDICON_CONSUMER"' > ../../out/consumer.log 2>/dev/null || true
+                      result=$(grep -oE 'LORDICON_CONSUMER (PASS|FAIL).*' ../../out/consumer.log | head -1 || true)
+                      [ -n "$result" ] && break
+                  done
+                  xcrun simctl io "$udid" screenshot ../../out/consumer.png
+                  case "$result" in
+                      *PASS*) echo "consumer ${{ matrix.flavour }}: passed" ;;
+                      *) echo "consumer ${{ matrix.flavour }}: ${result:-no result in 2 minutes}"; exit 1 ;;
+                  esac
+            - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+              if: always()
+              with:
+                  name: ios-consumer-${{ matrix.flavour }}
+                  path: out/
